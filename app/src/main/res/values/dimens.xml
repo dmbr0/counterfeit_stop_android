@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="size_progress_bar_big">135dp</dimen>
+    <dimen name="text_size_medium">19sp</dimen>
+    <dimen name="text_size_small">13sp</dimen>
+    <dimen name="text_size_1_small">15sp</dimen>
+</resources>
