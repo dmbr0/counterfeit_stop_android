@@ -1,9 +1,0 @@
-[submodule "tangemcard-common"]
-	path = tangemcard-common
-	url = git@github.com:TangemCash/tangemcard-common.git
-[submodule "tangemcard-android"]
-	path = tangemcard-android
-	url = git@github.com:TangemCash/tangemcard-android.git
-[submodule "tangemserver-android"]
-	path = tangemserver-android
-	url = git@github.com:TangemCash/tangemserver-android.git
