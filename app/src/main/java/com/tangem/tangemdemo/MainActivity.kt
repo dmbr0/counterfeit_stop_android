@@ -6,11 +6,9 @@ import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.nfc.tech.IsoDep
 import android.os.Bundle
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
-import androidx.appcompat.app.AppCompatActivity
 import android.view.View
 import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.tangem.tangemcard.android.data.Firmwares
@@ -31,29 +29,52 @@ import com.tangem.tangemserver.android.data.LocalStorage
 import kotlinx.android.synthetic.main.activity_main.*
 import java.util.*
 
+/***
+ *
+ * Simple example how to use tangemcard libraries to read Tangem cards on android phone with NFC.
+ *
+ * This example show:
+ * 1. Setup permissions to access NFC reader (in AndroidManifest.xml and check&request permissions on MainActivity)
+ * 2. Setup intent filters in AndroidManifest.xml to startup application by simple tap on Tangem card
+ * 3. Setup local environment (PINStorage, FirmwareStorage, Issuers and etc) to use tangemcard libraries
+ * 4. Setup scan card activity layout (MainActivity) to show user how to tap card according to the phone's NFC reader location
+ * 5. Setup NFC and tangem card callbacks to run ReadCardInfoTask and process read result
+ * 6. How to workaround with security delay (show WaitSecurityDelayDialog), enforced by card
+ */
 class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback, CardProtocol.Notifications {
 
     companion object {
         val TAG: String = MainActivity::class.java.simpleName
     }
 
+    // NFC helper
     private lateinit var nfcManager: NfcManager
-    private lateinit var nfcDeviceAntenna: NfcDeviceAntennaLocation
-    private var unsuccessfulReadCount = 0
-    private var lastTag: Tag? = null
-    private var readCardInfoTask: ReadCardInfoTask? = null
-    private var onNfcReaderCallback: NfcAdapter.ReaderCallback? = null
 
+    // widget to show NFC reader location
+    private lateinit var nfcDeviceAntenna: NfcDeviceAntennaLocation
+
+    // this counter used to increase timeout if card read fail by some reason
+    private var unsuccessfulReadCount = 0
+
+    // task that run when tap card
+    private var readCardInfoTask: ReadCardInfoTask? = null
+
+    // local data storages used by tangemcard libraries
+
+    // pin's list, that can be used to read card
     private lateinit var pinStorage: PINsProvider
+    // card firmwares hashes (to prove card authenticity)
     private lateinit var firmwaresStorage: FirmwaresDigestsProvider
+    // card artwork's and substitution data
     private lateinit var localStorage: LocalStorage
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
+        // start reading card if NFC intent received
         if (intent != null && (NfcAdapter.ACTION_TECH_DISCOVERED == intent.action || NfcAdapter.ACTION_NDEF_DISCOVERED == intent.action)) {
             val tag = intent.getParcelableExtra<Tag>(NfcAdapter.EXTRA_TAG)
-            if (tag != null && onNfcReaderCallback != null)
-                onNfcReaderCallback!!.onTagDiscovered(tag)
+            if (tag != null )
+                onTagDiscovered(tag)
         }
     }
 
@@ -61,12 +82,11 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback, CardProtoco
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        // initialize local storage
         PINStorage.init(applicationContext)
         pinStorage = PINStorage()
         firmwaresStorage = Firmwares(applicationContext)
         localStorage = LocalStorage(applicationContext)
-
-        val issuers = ArrayList<Issuer>()
 
         val listType = object : TypeToken<List<Issuer>>() {}.type
 
@@ -95,17 +115,15 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback, CardProtoco
 
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
 
+        // create NFC helper and setup activity as NFC callback receiver
         nfcManager = NfcManager(this, this)
 
+        // verify NFC permissions
         verifyPermissions()
-
-        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_NOSENSOR
-
-        setNfcAdapterReaderCallback(this)
 
         rippleBackgroundNfc.startRippleAnimation()
 
-        // init NFC Antenna
+        // create widget wit NFC reader location
         nfcDeviceAntenna = NfcDeviceAntennaLocation(this, ivHandCardHorizontal, ivHandCardVertical, llHand, llNfc)
         nfcDeviceAntenna.init()
 
@@ -115,12 +133,12 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback, CardProtoco
         else
             tvNFCHint.text = String.format(getString(R.string.scan_banknote), getString(R.string.phone))
 
-        // NFC
+        // immediately start reading if activity start with NFC intent
         val intent = intent
         if (intent != null && (NfcAdapter.ACTION_TECH_DISCOVERED == intent.action || NfcAdapter.ACTION_NDEF_DISCOVERED == intent.action)) {
             val tag = intent.getParcelableExtra<Tag>(NfcAdapter.EXTRA_TAG)
-            if (tag != null && onNfcReaderCallback != null) {
-                onNfcReaderCallback!!.onTagDiscovered(tag)
+            if (tag != null ) {
+                onTagDiscovered(tag)
             }
         }
     }
@@ -130,6 +148,7 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback, CardProtoco
     }
 
     override fun onTagDiscovered(tag: Tag) {
+        // this function call when user tap card
         try {
             val isoDep = IsoDep.get(tag)
                 ?: throw CardProtocol.TangemException(getString(R.string.wrong_tag_err))
@@ -139,8 +158,7 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback, CardProtoco
             } else {
                 isoDep.timeout = 90000
             }
-            lastTag = tag
-
+            // When first time read the card ReadCardInfoTask must be executed to read card information
             readCardInfoTask = ReadCardInfoTask(NfcReader(nfcManager, isoDep), localStorage, pinStorage, this)
             readCardInfoTask!!.start()
 
@@ -153,11 +171,13 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback, CardProtoco
     public override fun onResume() {
         super.onResume()
         nfcDeviceAntenna.animate()
+        // start NFC reader when activity resume
         ReadCardInfoTask.resetLastReadInfo()
         nfcManager.onResume()
     }
 
     public override fun onPause() {
+        // when activity pause break readCardInfoTask if it executed and stop NFC reading
         nfcManager.onPause()
         if (readCardInfoTask != null) {
             readCardInfoTask!!.cancel(true)
@@ -166,6 +186,7 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback, CardProtoco
     }
 
     public override fun onStop() {
+        // when activity stop break readCardInfoTask if it executed and stop NFC reading
         nfcManager.onStop()
         if (readCardInfoTask != null) {
             readCardInfoTask!!.cancel(true)
@@ -174,20 +195,31 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback, CardProtoco
     }
 
     override fun onReadStart(cardProtocol: CardProtocol) {
+        // this function call before start reading task
+        // this function call in separate reading thread therefore using post to access UI
+
+        // show reading progress bar
         rlProgressBar.post { rlProgressBar.visibility = View.VISIBLE }
     }
 
     override fun onReadProgress(protocol: CardProtocol, progress: Int) {
+        // this function may call during reading task execution to notify progress
+        // this function call in separate reading thread therefore using post to access UI
     }
 
     override fun onReadFinish(cardProtocol: CardProtocol?) {
+        // this function call when reading task is finished
+        // this function call in separate reading thread therefore using post to access UI
         readCardInfoTask = null
         if (cardProtocol != null) {
             if (cardProtocol.error == null) {
+                // reading task finished successfully
+                // in this place possible run next task (sign for example) or switch to new activity
                 nfcManager.notifyReadResult(true)
                 rlProgressBar.post {
                     rlProgressBar.visibility = View.GONE
 
+                    // for this simple example just show activity with card content description
                     val intent = Intent(this, ResultActivity::class.java)
 
                     val resultString = StringBuilder()
@@ -212,26 +244,30 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback, CardProtoco
                     if (card.status == TangemCard.Status.Loaded) {
                         resultString.append("Wallet public key: <b>" + Util.bytesToHex(card.walletPublicKey) + "</b><br>")
                     }
-                    //resultString.append("Read data: <br>"+cardProtocol.readResult.getParsedTLVs(""))
+                    // uncomment next line to view all read result tlv description
+                    // resultString.append("Read data: <br>"+cardProtocol.readResult.getParsedTLVs(""))
                     intent.putExtra(ResultActivity.EXTRAS_RESULT_STRING, resultString.toString())
                     startActivity(intent)
                 }
             } else {
+                // card reading finish with some error
                 rlProgressBar.post {
                     Toast.makeText(this, R.string.try_to_scan_again, Toast.LENGTH_SHORT).show()
                     unsuccessfulReadCount++
 
                     if (cardProtocol.error is CardProtocol.TangemException_InvalidPIN)
+                        // possible card is protected by PIN, user must enter PIN and try again
                         doEnterPIN()
                     else {
-                        if (cardProtocol.error is CardProtocol.TangemException_ExtendedLengthNotSupported)
+                        if (cardProtocol.error is CardProtocol.TangemException_ExtendedLengthNotSupported) {
+                            // phone's NFC stack don't support APDU with extended length, card can't be read on this device
                             if (!NoExtendedLengthSupportDialog.allReadyShowed)
                                 NoExtendedLengthSupportDialog().show(
                                     supportFragmentManager,
                                     NoExtendedLengthSupportDialog.TAG
                                 )
+                        }
 
-                        lastTag = null
                         ReadCardInfoTask.resetLastReadInfo()
                         nfcManager.notifyReadResult(false)
                     }
@@ -239,6 +275,7 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback, CardProtoco
             }
         }
 
+        // hide progress bar (with some delay for better UI usability)
         rlProgressBar.postDelayed({
             try {
                 rlProgressBar.visibility = View.GONE
@@ -249,6 +286,8 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback, CardProtoco
     }
 
     private fun doEnterPIN() {
+        // workaround with request PIN
+        // not supported in this example
         Toast.makeText(
             this,
             "Card protected by PIN. This demo don't support reading of cards protected by PIN",
@@ -257,6 +296,7 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback, CardProtoco
     }
 
     override fun onReadCancel() {
+        // this function call when reading task canceled by some reason (activity goes to background for example)
         readCardInfoTask = null
         ReadCardInfoTask.resetLastReadInfo()
         rlProgressBar.postDelayed({
@@ -269,19 +309,22 @@ class MainActivity : AppCompatActivity(), NfcAdapter.ReaderCallback, CardProtoco
     }
 
     override fun onReadWait(msec: Int) {
+        // this function call when card enforce security delay and repeatedly call approximately every second during security delay
         WaitSecurityDelayDialog.OnReadWait(Objects.requireNonNull(this), msec)
     }
 
     override fun onReadBeforeRequest(timeout: Int) {
+        // this function call before every APDU command
+        // for compatibility with old card firmwares (that not support security delay notifications)
+        // show WaitSecurityDelayDialog after some small time to notify user
         WaitSecurityDelayDialog.onReadBeforeRequest(Objects.requireNonNull(this), timeout)
     }
 
     override fun onReadAfterRequest() {
+        // this function call after every APDU command
+        // for compatibility with old card firmwares (that not support security delay notifications)
+        // hide WaitSecurityDelayDialog if it was showed
         WaitSecurityDelayDialog.onReadAfterRequest(Objects.requireNonNull(this))
-    }
-
-    private fun setNfcAdapterReaderCallback(callback: NfcAdapter.ReaderCallback) {
-        onNfcReaderCallback = callback
     }
 
 }
